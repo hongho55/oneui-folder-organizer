@@ -529,7 +529,11 @@ public final class MainActivity extends Activity {
                         detail+="\n"+apps.get(key).packageName;
                     } else detail=identity(key,acrossFolders,identityCounts);
                     if(!detail.isEmpty()){TextView metadata=text(detail,13);metadata.setTextColor(secondary);words.addView(metadata);}
-                    if(proposal==null)row.setContentDescription(label(apps.get(key))+", "+folderOf(key)+(selecting?(chosen?", 선택됨":", 선택 안 됨"):""));
+                    if(proposal==null) {
+                        String spoken=label(apps.get(key))+", "+(detail.isEmpty()?folderOf(key):detail);
+                        if(identityCounts.getOrDefault(label(apps.get(key))+"\t"+apps.get(key).packageName,0)>1)spoken+=", "+apps.get(key).activity;
+                        row.setContentDescription(spoken+(selecting?(chosen?", 선택됨":", 선택 안 됨"):""));
+                    }
                 }
                 row.addView(words,new LinearLayout.LayoutParams(0,-2,1));
                 return row;
