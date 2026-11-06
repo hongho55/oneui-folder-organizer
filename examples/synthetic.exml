@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<viewType_appOrder>CUSTOM</viewType_appOrder>
+<Rows_appOrder>1</Rows_appOrder>
+<Columns_appOrder>2</Columns_appOrder>
+<FolderGrid>2X2</FolderGrid>
+<?xml version="1.0" encoding="utf-8"?>
+<home><appwidget screen="0" x="0" y="0" spanX="2" spanY="1" packageName="example.fixture.widget" className="example.fixture.Widget" appWidgetID="77" /></home>
+<hotseat><favorite screen="0" packageName="example.fixture.dock" className="example.fixture.Dock" /></hotseat>
+<home_dex />
+<hotseat_dex />
+<appOrder>
+  <folder screen="0" title="가상 기존 폴더" options="0" color="0">
+    <favorite screen="0" packageName="example.fixture.alpha" className="example.fixture.Alpha" hidden="0" />
+    <favorite screen="0" packageName="example.fixture.beta" className="example.fixture.Beta" hidden="0" />
+  </folder>
+  <favorite screen="0" packageName="example.fixture.gamma" className="example.fixture.Gamma" />
+  <favorite screen="0" packageName="example.fixture.delta" className="example.fixture.Delta" />
+  <favorite screen="0" packageName="example.fixture.epsilon" className="example.fixture.Epsilon" />
+  <favorite screen="0" packageName="example.fixture.zeta" className="example.fixture.Zeta" />
+</appOrder>
+<appOrder_dex />

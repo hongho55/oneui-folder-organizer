@@ -1,0 +1,13 @@
+# Generated files and every real device backup stay out of source control.
+__pycache__/
+*.pyc
+*.apk
+*.idsig
+*.exml
+!examples/synthetic.exml
+*.validation.json
+*.keystore
+*.jks
+**/build/
+local.properties
+.DS_Store

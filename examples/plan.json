@@ -1,0 +1,17 @@
+{
+  "notice": "FICTIONAL COMPONENTS ONLY. This is not a real installed-app inventory.",
+  "folders": [
+    {"name": "가상 폴더 A", "apps": [
+      {"package": "example.fixture.alpha", "activity": "example.fixture.Alpha"},
+      {"package": "example.fixture.beta", "activity": "example.fixture.Beta"}
+    ]},
+    {"name": "가상 폴더 B", "apps": [
+      {"package": "example.fixture.gamma", "activity": "example.fixture.Gamma"},
+      {"package": "example.fixture.delta", "activity": "example.fixture.Delta"}
+    ]},
+    {"name": "가상 폴더 C", "apps": [
+      {"package": "example.fixture.epsilon", "activity": "example.fixture.Epsilon"},
+      {"package": "example.fixture.zeta", "activity": "example.fixture.Zeta"}
+    ]}
+  ]
+}
