@@ -25,6 +25,9 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - run: sdkmanager 'platforms;android-35' 'build-tools;36.0.0'
       - run: python3 android/io-probe/build.py
       - uses: actions/upload-artifact@v4
