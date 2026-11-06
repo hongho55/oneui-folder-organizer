@@ -25,8 +25,22 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - run: sdkmanager 'platforms;android-35' 'build-tools;36.0.0'
       - run: python3 android/io-probe/build.py
+      - name: Java EXML regression tests (synthetic data only)
+        run: |
+          mkdir -p android/organizer/build/core-tests
+          javac --release 8 -encoding UTF-8 -d android/organizer/build/core-tests android/organizer/src/dev/local/oneuifolders/core/ExmlEditor.java android/organizer/tests/dev/local/oneuifolders/core/ExmlEditorTest.java
+          java -cp android/organizer/build/core-tests dev.local.oneuifolders.core.ExmlEditorTest examples/synthetic.exml
+      - run: python3 android/organizer/build.py
+      - run: python3 android/organizer/device-tests/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shizuku-folder-editor-preview
+          path: android/organizer/build/oneui-folder-organizer.apk
       - uses: actions/upload-artifact@v4
         with:
           name: permission-free-io-probe

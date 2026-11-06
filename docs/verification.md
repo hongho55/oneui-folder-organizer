@@ -45,11 +45,45 @@ Home Up의 레이아웃 복원은 파일을 런처에 넘기는 전체 복원 �
 
 Home Up 설정을 복원하는 Smart Switch 브로드캐스트와 런처 레이아웃 EXML은 서로 다른 경로입니다. 일반 APK가 삼성 내부 권한을 얻는다고 가정하거나, 유사한 브로드캐스트가 있다는 이유만으로 백업/복원을 직접 호출할 수 있다고 주장하지 않습니다.
 
-## 후속 과제
+## 4. Shizuku 편집기 미리보기와 PC ADB 대안
 
-- 사용자 승인 아래 APK 내장 무선 ADB 또는 선택적 Shizuku 파일 전송 경로 실기기 검증
-- 휴먼리더블 앱 이름·아이콘, 분류안 편집 UI
-- 폴더 밖 앱 유지와 숨긴 앱의 명시적 보존 모델
-- 추가 Home Up/One UI 버전별 합성 회귀 입력과 실제 복원 검증
+같은 기기·버전 조합에서 새 APK를 설치하고 Shizuku 권한을 승인했습니다.
 
-각 과제는 아직 구현·검증하지 않았습니다. 현재 APK가 자동 분류나 순정 폴더 편집을 제공하는 것으로 오해하지 마세요.
+- 파일관리자를 사용하지 않고 앱의 Shizuku UserService가 **UID 2000**으로 Home Up 백업 폴더를 읽었습니다.
+- 실제 원본이 앱에 **284개 앱·21개 폴더**로 열렸습니다. 앱 이름과 현재 폴더를 화면에서 확인했습니다.
+- 별도 동일 서명 계측 시험 APK에서 **26개 검사**가 통과했습니다. 실제 Android 파서, UI 폴더 필터 처리, 앱 이동 처리, 로컬 자동 저장·재불러오기, Shizuku Binder의 파일 목록/읽기/새 파일 저장을 실행했습니다.
+- 임시 앱 이동은 원래 분류안으로 되돌렸고, 원래 21개 폴더 구성의 새 파일을 준비했습니다. 새 파일을 앱이 해시로 확인한 뒤 PC ADB로도 별도 재읽어 바이트·해시·컴포넌트·앱스 외 영역을 검증했습니다. 원본은 그대로입니다.
+- 잘못된 경로, 원본/기존 출력 덮어쓰기, 잘못된 원본 해시, 앱스 외 바이트 변경을 실제 Binder 호출로 거부하는 것을 확인했습니다.
+- Android Binder에서 애플리케이션이 던진 `RemoteException`은 의도한 오류가 전달되지 않았습니다. 지원되는 런타임 예외로 수정한 뒤 위 부정 검사를 포함해 다시 통과했습니다.
+- PC ADB 도구도 실기기에서 목록 조회·원본 읽기·새 파일 준비·기존 이름 거부를 실행했습니다.
+- 별도 계측 시험 APK는 시험 뒤 제거했습니다. 편집기와 개인 분류안은 남겼고 화면 제한 시간 설정은 바꾸지 않았습니다.
+
+**증거의 경계:** UI 처음 열기·권한 승인·백업 선택/불러오기는 실제 화면에서 확인했습니다. 이후 자동 계측 검사는 실제 앱의 UI/controller 처리와 Binder 경로를 호출한 것이며, 잠금 해제 상태에서 모든 버튼을 사람이 눌렀다는 뜻은 아닙니다. 특히 폴더 필터는 잠금 화면이 레이아웃을 억제할 때도 실제 선택 listener를 호출해 검사했습니다. 새 Shizuku 버전에서는 **Home Up 복원 버튼을 누르지 않았습니다.** 복원 목록 갱신과 실제 복원은 사용자가 별도로 확인해야 합니다.
+
+로컬 회귀: Python **39개 테스트**, Java 코어 **83개 assertion** 통과. 공개 테스트에는 가상 입력만 쓰며 개인 원본·앱 목록·계측 출력은 배포하지 않습니다.
+
+### 계측 시험 재현 (개인 기기에서만, 명시적 파일 생성)
+
+일반 사용에는 필요 없습니다. 같은 로컬 키로 편집기와 시험 APK를 빌드하고, 앱에서 **직접 Shizuku를 허용하고 실제 원본을 불러온 뒤** 실행합니다. 시험은 새 백업 파일 한 개를 추가하므로 여분 원본을 보관하세요. 런처를 복원하지 않습니다.
+
+```sh
+python3 android/organizer/build.py
+python3 android/organizer/device-tests/build.py
+adb -s SERIAL install -r android/organizer/build/oneui-folder-organizer.apk
+adb -s SERIAL install -r android/organizer/build/device-tests/oneui-editor-device-tests.apk
+adb -s SERIAL shell am instrument -w -e allowStage yes \
+  dev.local.oneuifolders.tests/dev.local.oneuifolders.tests.EditorDeviceTest
+# result JSON과 INSTRUMENTATION_CODE를 확인합니다. ADB 종료 코드만으로 성공 판정하지 않습니다.
+adb -s SERIAL uninstall dev.local.oneuifolders.tests
+```
+
+`allowStage=yes`가 없으면 시험은 파일을 만들지 않고 중단합니다. 결과 JSON에는 개인 백업 파일명/해시가 들어가므로 공개 이슈에 붙이지 마세요. 시험 후 앱을 다시 열면 저장한 분류안으로 돌아옵니다.
+
+## 아직 검증/구현하지 않은 부분
+
+- 새 Shizuku APK가 준비한 파일을 이용한 추가 네이티브 복원 실행
+- 추가 Home Up/One UI 버전·업무 프로필 호환성
+- 폴더 밖 단독 앱 유지, 숨긴 앱, 아이콘 편집
+- 모든 화면 크기/접근성 설정의 시각적 UI QA
+
+설정과 대안은 [Shizuku·ADB 사용 안내](shizuku-and-adb.md)를 참고하세요.
