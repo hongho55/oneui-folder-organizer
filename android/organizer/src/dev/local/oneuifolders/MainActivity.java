@@ -10,6 +10,7 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.view.WindowInsets;
@@ -22,6 +23,7 @@ import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 import android.text.Editable;
+import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
@@ -53,12 +55,16 @@ public final class MainActivity extends Activity {
     public static final int ID_LIST = 0x4f0101, ID_SEARCH = 0x4f0102,
             ID_MENU = 0x4f0103, ID_PREPARE = 0x4f0104, ID_RECOMMEND = 0x4f0105,
             ID_UNDO = 0x4f0106, ID_APPLY = 0x4f0107, ID_CANCEL = 0x4f0108,
-            ID_MOVE = 0x4f0109, ID_SELECT = 0x4f010a, ID_BACK = 0x4f010b;
-    private TextView status, summary, contextTitle, empty;
+            ID_MOVE = 0x4f0109, ID_SELECT = 0x4f010a, ID_BACK = 0x4f010b,
+            ID_MOVE_NEW = 0x4f010c, ID_MOVE_LIST = 0x4f010d, ID_SELECTION_CANCEL = 0x4f010e;
+    private static final int ROW_FOLDER = 0, ROW_APP = 1, ROW_SECTION = 2, ROW_PROPOSAL = 3;
+    private TextView status, summary, contextTitle, empty, resultText, footnote;
     private EditText search;
     private LinearLayout actions;
-    private Button back, prepare, menuButton, fileImport;
-    private LinearLayout emptyPanel;
+    private Button back, prepare, menuButton, fileImport, moveSelected, cancelSelection, undoButton, selectAll;
+    private LinearLayout emptyPanel, resultRow;
+    // Compact description of the change undoPlan can revert; survives recreation with it.
+    private String lastResult;
     private final LinkedHashSet<String> selectedKeys = new LinkedHashSet<>();
     private final Map<String, Drawable> icons = new HashMap<>();
     private LinkedHashMap<String,List<String>> undoPlan;
@@ -128,13 +134,18 @@ public final class MainActivity extends Activity {
         Object retained=getLastNonConfigurationInstance();
         if(retained instanceof UndoState && snapshot!=null && !planReadFailed) {
             UndoState previous=(UndoState)retained;
-            if(snapshot.sourceSha256.equals(previous.sourceHash))undoPlan=FolderPlanner.copy(previous.plan);
+            if(snapshot.sourceSha256.equals(previous.sourceHash)){undoPlan=FolderPlanner.copy(previous.plan);lastResult=previous.result;}
         }
         if (state != null) {
             selectedFolder = state.getString("folder", "전체");
+            ArrayList<String> kept=state.getStringArrayList("selected");
+            if(snapshot!=null&&state.getBoolean("selecting",false)) {
+                selecting=true;
+                if(kept!=null)for(String key:kept)if(apps.containsKey(key))selectedKeys.add(key);
+            }
             search.setText(state.getString("query", ""));
-            refresh();
         }
+        refresh();
         if (snapshot == null) updateShizukuState();
     }
     private int dp(int n) { return (int)(n * getResources().getDisplayMetrics().density + .5f); }
@@ -146,6 +157,8 @@ public final class MainActivity extends Activity {
         root.setOnApplyWindowInsetsListener((v,insets) -> {
             android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
             v.setPadding(dp(16)+bars.left,dp(8)+bars.top,dp(16)+bars.right,dp(8)+bars.bottom);
+            // While typing, give the static footnote's height back to the results list.
+            if(footnote!=null)footnote.setVisibility(insets.isVisible(WindowInsets.Type.ime())?View.GONE:View.VISIBLE);
             return insets;
         });
         setContentView(root);
@@ -183,14 +196,32 @@ public final class MainActivity extends Activity {
         LinearLayout fileRow=row(emptyPanel);
         fileImport=button(fileRow,"파일에서 원본 불러오기",v -> choose(OPEN,"*/*",""));fileImport.setTag("import-file");
         content.addView(emptyScroll,new FrameLayout.LayoutParams(-1,-1)); list.setEmptyView(emptyScroll);
-        status = text("준비 중",13); status.setTextColor(secondary); status.setMaxLines(3);
+        // Last edit + Undo live apart from the status line so diagnostics never push Undo out of view.
+        resultRow = new LinearLayout(this); resultRow.setOrientation(LinearLayout.HORIZONTAL); resultRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        GradientDrawable resultShape = new GradientDrawable(); resultShape.setColor(container); resultShape.setCornerRadius(dp(12));
+        resultRow.setBackground(resultShape); resultRow.setPadding(dp(12),0,dp(4),0); resultRow.setTag("result");
+        LinearLayout.LayoutParams resultParams = new LinearLayout.LayoutParams(-1,-2); resultParams.setMargins(0,dp(4),0,dp(4));
+        root.addView(resultRow,resultParams);
+        resultText = text("",14); resultText.setMaxLines(2); resultText.setEllipsize(TextUtils.TruncateAt.END);
+        resultText.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        resultRow.addView(resultText,new LinearLayout.LayoutParams(0,-2,1));
+        undoButton = button(resultRow,"되돌리기",v -> undo()); undoButton.setId(ID_UNDO); undoButton.setTag("result-undo");
+        undoButton.setBackgroundTintList(ColorStateList.valueOf(surface));
+        LinearLayout.LayoutParams undoParams = new LinearLayout.LayoutParams(-2,-2); undoParams.setMargins(dp(8),dp(4),0,dp(4));
+        undoButton.setLayoutParams(undoParams);
+        status = text("준비 중",13); status.setTextColor(secondary); status.setMaxLines(2); status.setEllipsize(TextUtils.TruncateAt.END);
         status.setMinHeight(dp(48)); status.setTag("session_status"); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         status.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("작업 상태").setMessage(status.getText()).setPositiveButton("닫기",null).show());
         root.addView(status);
         LinearLayout output = row(root);
         prepare = button(output,"새 파일 준비",v -> prepareFile()); prepare.setId(ID_PREPARE); prepare.setTag("prepare");
         prepare.setBackgroundTintList(ColorStateList.valueOf(container)); prepare.setTextColor(primary);
-        TextView footnote = text("로컬 분류안만 편집합니다. 실제 복원은 Home Up에서 직접 합니다.",12);
+        // Selection mode swaps the prepare action for its own primary pair in the same place.
+        cancelSelection = button(output,"선택 취소",v -> exitSelection()); cancelSelection.setId(ID_SELECTION_CANCEL); cancelSelection.setTag("selection-cancel");
+        moveSelected = button(output,"0개 앱 이동",v -> bulkMoveDialog()); moveSelected.setId(ID_MOVE); moveSelected.setTag("selection-move");
+        moveSelected.setBackgroundTintList(ColorStateList.valueOf(container));
+        ((LinearLayout.LayoutParams)moveSelected.getLayoutParams()).weight = 2;
+        footnote = text("로컬 분류안만 편집합니다. 실제 복원은 Home Up에서 직접 합니다.",12);
         footnote.setTextColor(secondary); root.addView(footnote);
         refresh();
     }
@@ -236,20 +267,22 @@ public final class MainActivity extends Activity {
     }
     private void navigateBack() {
         if(proposal!=null){cancelProposal();return;}
-        if(selecting){selecting=false;selectedKeys.clear();refresh();return;}
+        if(selecting){exitSelection();return;}
         if(!query.isEmpty()){search.setText("");refresh();return;}
         if(!selectedFolder.equals("전체")){showFolders();return;}
         finish();
     }
     @Override public void onBackPressed(){navigateBack();}
     private static final class UndoState {
-        final String sourceHash;
+        final String sourceHash, result;
         final LinkedHashMap<String,List<String>> plan;
-        UndoState(String hash,Map<String,List<String>> value){sourceHash=hash;plan=FolderPlanner.copy(value);}
+        UndoState(String hash,Map<String,List<String>> value,String message){sourceHash=hash;plan=FolderPlanner.copy(value);result=message;}
     }
-    @Override public Object onRetainNonConfigurationInstance(){return snapshot==null||undoPlan==null?null:new UndoState(snapshot.sourceSha256,undoPlan);}
+    @Override public Object onRetainNonConfigurationInstance(){return snapshot==null||undoPlan==null?null:new UndoState(snapshot.sourceSha256,undoPlan,lastResult);}
     @Override protected void onSaveInstanceState(Bundle out) {
-        out.putString("folder",selectedFolder);out.putString("query",query);super.onSaveInstanceState(out);
+        out.putString("folder",selectedFolder);out.putString("query",query);
+        out.putBoolean("selecting",selecting);out.putStringArrayList("selected",new ArrayList<>(selectedKeys));
+        super.onSaveInstanceState(out);
     }
     private void note(String message) { if(status!=null)status.setText(message);putDiagnostic("status",message); }
     private void background(String message,Work task) {
@@ -293,7 +326,7 @@ public final class MainActivity extends Activity {
         source=bytes;snapshot=parsed;sourceName=name;transport=via;apps.clear();labels.clear();icons.clear();
         for(ExmlEditor.App app:parsed.apps)apps.put(app.key,app);
         folders.clear();folders.putAll(FolderPlanner.copy(parsed.folders));
-        selectedFolder="전체";selectedKeys.clear();selecting=false;proposal=null;undoPlan=null;planReadFailed=false;
+        selectedFolder="전체";selectedKeys.clear();selecting=false;proposal=null;undoPlan=null;lastResult=null;planReadFailed=false;
         // Read the saved plan before any write. A failed decode must leave its bytes intact.
         File legacy=new File(getFilesDir(),"plan.json");
         File archived=planFile(parsed.sourceSha256);
@@ -310,44 +343,42 @@ public final class MainActivity extends Activity {
         if(candidate==null&&!planReadFailed)savePlan();
         refresh();
         note(planReadFailed ? "저장안을 읽지 못했습니다. 저장 파일은 보존했습니다. 더보기에서 올바른 분류안을 가져오거나 원본 분류로 되돌려 새 편집을 시작하세요."
-                : "불러옴 · "+name+" · 로컬 분류안 자동 저장. 실제 런처는 바뀌지 않았습니다.");
+                : "불러옴 · "+name+" · 편집은 이 기기의 분류안에만 저장됩니다.");
         putDiagnostic("source_name",name);putDiagnostic("source_sha256",parsed.sourceSha256);putDiagnostic("source_transport",via);putDiagnostic("app_count",apps.size());
     }
     private void foldersFrom(Map<String,List<String>> plan){folders.clear();folders.putAll(FolderPlanner.copy(plan));}
     private void refresh(){
         if(summary==null)return;
-        int invalid=0;for(List<String> f:folders.values())if(f.size()<2)invalid++;
         if(!selectedFolder.equals("전체")&&!folders.containsKey(selectedFolder))selectedFolder="전체";
-        contextTitle.setText(proposal!=null?"자동 정리 제안":selectedFolder.equals("전체")?"내 폴더":selectedFolder);
-        summary.setText(proposal!=null
-                ? proposal.movedCount+"개 이동 예정 · "+proposal.folders.size()+"개 폴더 · 검토 "+proposal.uncertainKeys.size()+"개 · 2개 미만 "+proposal.singletonCount+"개\n아래 전체 제안을 확인하세요. 적용 전까지 저장안은 그대로입니다."
-                : snapshot==null?"Home Up에서 백업을 만든 뒤 불러오세요."
-                : apps.size()+"개 앱 · "+folders.size()+"개 폴더"+(invalid>0?" · 2개 미만 "+invalid+"개: 파일 준비 전 병합 필요":"")+(selecting?" · "+selectedKeys.size()+"개 선택":""));
-        back.setVisibility(proposal!=null||selecting||!selectedFolder.equals("전체")||!query.isEmpty()?View.VISIBLE:View.GONE);
+        boolean inSelection=selecting&&proposal==null&&snapshot!=null;
         prepare.setText(snapshot==null?"Shizuku로 백업 불러오기":"새 파일 준비");
-        prepare.setVisibility(proposal==null&&!selecting?View.VISIBLE:View.GONE);
+        prepare.setVisibility(proposal==null&&!inSelection?View.VISIBLE:View.GONE);
         prepare.setEnabled(!busy&&proposal==null&&!planReadFailed);
+        cancelSelection.setVisibility(inSelection?View.VISIBLE:View.GONE);cancelSelection.setEnabled(!busy);
+        moveSelected.setVisibility(inSelection?View.VISIBLE:View.GONE);
         search.setVisibility(proposal==null&&snapshot!=null?View.VISIBLE:View.GONE);
         menuButton.setEnabled(!busy&&proposal==null);search.setEnabled(!busy);
         fileImport.setVisibility(snapshot==null?View.VISIBLE:View.GONE);fileImport.setEnabled(!busy);
-        actions.removeAllViews();
+        actions.removeAllViews();selectAll=null;
         if(proposal!=null) {
             Button cancel=button(actions,"취소",v -> cancelProposal());cancel.setId(ID_CANCEL);
             Button apply=button(actions,"로컬 분류안에 적용",v -> applyProposal());apply.setId(ID_APPLY);apply.setTag("proposal-apply");
             apply.setBackgroundTintList(ColorStateList.valueOf(container));
         } else if(snapshot!=null) {
             if(selecting) {
-                Button select=button(actions,"현재 결과 모두 선택",v -> {selectedKeys.addAll(visibleKeys());refresh();});select.setId(ID_SELECT);
-                Button move=button(actions,"선택 이동 ("+selectedKeys.size()+")",v -> bulkMoveDialog());move.setId(ID_MOVE);move.setTag("selection-move");move.setEnabled(!selectedKeys.isEmpty()&&!busy);
-                move.setBackgroundTintList(ColorStateList.valueOf(container));
+                selectAll=button(actions,"표시된 앱 모두 선택",v -> toggleVisibleSelection());selectAll.setId(ID_SELECT);selectAll.setTag("select-visible");
             } else {
-                Button recommend=button(actions,"자동 정리",v -> suggest());recommend.setId(ID_RECOMMEND);recommend.setTag("auto");recommend.setEnabled(!planReadFailed&&!busy);
-                Button select=button(actions,selectedFolder.equals("전체")?"앱 선택":"선택·이동",v -> {selecting=true;refresh();});select.setId(ID_SELECT);
+                // Manual selection leads; automatic suggestions are the secondary path.
+                Button select=button(actions,"앱 선택",v -> {selecting=true;refresh();});select.setId(ID_SELECT);select.setTag("select");
+                select.setBackgroundTintList(ColorStateList.valueOf(container));
                 if(!selectedFolder.equals("전체"))button(actions,"이름·병합",v -> folderActions(selectedFolder));
+                Button recommend=button(actions,"자동 정리",v -> suggest());recommend.setId(ID_RECOMMEND);recommend.setTag("auto");recommend.setEnabled(!planReadFailed&&!busy);
             }
-            if(undoPlan!=null){Button undo=button(actions,"되돌리기",v -> undo());undo.setId(ID_UNDO);undo.setTag("undo");}
         }
         for(int i=0;i<actions.getChildCount();i++)if(busy)actions.getChildAt(i).setEnabled(false);
+        resultRow.setVisibility(snapshot!=null&&undoPlan!=null&&proposal==null&&!inSelection?View.VISIBLE:View.GONE);
+        resultText.setText(lastResult==null?"직전 편집":lastResult);
+        undoButton.setEnabled(!busy&&!planReadFailed);
         refreshList();
         putDiagnostic("folder_count",folders.size());
         putDiagnostic("current_plan_sha256",snapshot==null?"":ExmlEditor.sha256(planJson().toString().getBytes(StandardCharsets.UTF_8)));
@@ -358,9 +389,25 @@ public final class MainActivity extends Activity {
         catch(Exception ignored){try{value=getPackageManager().getApplicationLabel(getPackageManager().getApplicationInfo(app.packageName,0)).toString();}catch(Exception ignoredAgain){}}
         labels.put(app.key,value);return value;
     }
+    // Apps match by their own name or package. Folder names match folder rows only,
+    // so a folder hit never repeats each of its members as a separate result.
     private boolean matches(String key) {
         ExmlEditor.App app=apps.get(key);String needle=query.toLowerCase(Locale.ROOT);
-        return (label(app)+" "+app.packageName+" "+folderOf(key)).toLowerCase(Locale.ROOT).contains(needle);
+        return label(app).toLowerCase(Locale.ROOT).contains(needle)||app.packageName.toLowerCase(Locale.ROOT).contains(needle);
+    }
+    /** Secondary line for an app row: folder when the list spans folders, package/activity only when the name alone is ambiguous. */
+    private String identity(String key,boolean withFolder,Map<String,Integer> counts) {
+        ExmlEditor.App app=apps.get(key);String name=label(app);
+        ArrayList<String> parts=new ArrayList<>();
+        if(withFolder)parts.add(folderOf(key));
+        boolean sameName=counts.getOrDefault(name,0)>1;
+        boolean packageHit=!query.isEmpty()&&!name.toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT));
+        if((sameName||packageHit)&&!name.equals(app.packageName))parts.add(app.packageName);
+        if(counts.getOrDefault(name+"\t"+app.packageName,0)>1) {
+            String activity=app.activity.substring(app.activity.lastIndexOf('.')+1);
+            parts.add(activity.isEmpty()?app.activity:activity);
+        }
+        return TextUtils.join(" · ",parts);
     }
     private List<String> visibleKeys() {
         ArrayList<String> result=new ArrayList<>();
@@ -378,36 +425,82 @@ public final class MainActivity extends Activity {
     }
     private void refreshList(){
         if(list==null)return;
-        boolean browsing=proposal==null&&!selecting&&selectedFolder.equals("전체");
-        ArrayList<String> rows=new ArrayList<>();
-        final Set<Integer> headingRows=new HashSet<>();
+        if(!selectedFolder.equals("전체")&&!folders.containsKey(selectedFolder))selectedFolder="전체";
+        final boolean browsing=proposal==null&&!selecting&&selectedFolder.equals("전체");
+        final boolean searching=browsing&&!query.isEmpty();
+        final boolean acrossFolders=selectedFolder.equals("전체");
+        final ArrayList<String> rows=new ArrayList<>();
+        final ArrayList<Integer> kinds=new ArrayList<>();
+        final ArrayList<String> appRows=new ArrayList<>();
+        int folderHits=0;
         if(proposal!=null) {
             for(Map.Entry<String,List<String>> group:proposal.folders.entrySet()) {
-                headingRows.add(rows.size());rows.add(group.getKey());rows.addAll(group.getValue());
+                rows.add(group.getKey());kinds.add(ROW_PROPOSAL);
+                for(String key:group.getValue()){rows.add(key);kinds.add(ROW_APP);}
             }
+        } else if(searching) {
+            // Home search: folders whose name matches, then matching apps with their current folder.
+            String needle=query.toLowerCase(Locale.ROOT);
+            ArrayList<String> names=new ArrayList<>();
+            for(String name:folders.keySet())if(name.toLowerCase(Locale.ROOT).contains(needle))names.add(name);
+            folderHits=names.size();appRows.addAll(visibleKeys());
+            if(!names.isEmpty()){rows.add("폴더 "+names.size()+"개");kinds.add(ROW_SECTION);for(String name:names){rows.add(name);kinds.add(ROW_FOLDER);}}
+            if(!appRows.isEmpty()){rows.add("앱 "+appRows.size()+"개");kinds.add(ROW_SECTION);for(String key:appRows){rows.add(key);kinds.add(ROW_APP);}}
         } else if(browsing) {
-            for(Map.Entry<String,List<String>> group:folders.entrySet()) {
-                boolean match=group.getKey().toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT));
-                for(String key:group.getValue())if(matches(key))match=true;
-                if(match)rows.add(group.getKey());
-            }
-        } else rows.addAll(visibleKeys());
+            for(String name:folders.keySet()){rows.add(name);kinds.add(ROW_FOLDER);}
+        } else {
+            appRows.addAll(visibleKeys());
+            for(String key:appRows){rows.add(key);kinds.add(ROW_APP);}
+        }
+        final Map<String,Integer> identityCounts=new HashMap<>();
+        if(proposal==null&&!appRows.isEmpty())for(ExmlEditor.App app:apps.values()) {
+            String name=label(app);identityCounts.merge(name,1,Integer::sum);identityCounts.merge(name+"\t"+app.packageName,1,Integer::sum);
+        }
+        int invalid=0;for(List<String> f:folders.values())if(f.size()<2)invalid++;
+        contextTitle.setText(proposal!=null?"자동 정리 제안":selecting?selectedKeys.size()+"개 선택":selectedFolder.equals("전체")?"내 폴더":selectedFolder);
+        String overview;
+        if(proposal!=null)overview=proposal.movedCount+"개 이동 예정 · "+proposal.folders.size()+"개 폴더 · 검토 "+proposal.uncertainKeys.size()+"개 · 2개 미만 "+proposal.singletonCount+"개\n아래 전체 제안을 확인하세요. 적용 전까지 저장안은 그대로입니다.";
+        else if(snapshot==null)overview="Home Up에서 백업을 만든 뒤 불러오세요.";
+        else if(selecting) {
+            int outside=0;HashSet<String> shown=new HashSet<>(appRows);for(String key:selectedKeys)if(!shown.contains(key))outside++;
+            overview="범위: "+(acrossFolders?"모든 폴더":selectedFolder)+(query.isEmpty()?"":" · 검색 “"+query+"”")+" · "+appRows.size()+"개 표시"
+                    +(outside>0?" · 목록 밖 선택 "+outside+"개":"");
+        }
+        else if(searching)overview="검색 결과 · 폴더 "+folderHits+"개 · 앱 "+appRows.size()+"개";
+        else if(browsing)overview=apps.size()+"개 앱 · "+folders.size()+"개 폴더"+(invalid>0?" · 2개 미만 "+invalid+"개: 파일 준비 전 병합 필요":"");
+        else {
+            int size=folders.get(selectedFolder).size();
+            overview=size+"개 앱"+(size<2?" · 파일 준비 전 앱을 더 넣거나 병합 필요":"")+(query.isEmpty()?"":" · 검색 결과 "+appRows.size()+"개");
+        }
+        summary.setText(overview);
+        back.setVisibility(proposal!=null||selecting||!selectedFolder.equals("전체")||!query.isEmpty()?View.VISIBLE:View.GONE);
+        if(selectAll!=null) {
+            boolean all=!appRows.isEmpty()&&selectedKeys.containsAll(appRows);
+            selectAll.setText(all?"표시된 앱 선택 해제":"표시된 앱 모두 선택");selectAll.setEnabled(!busy&&!appRows.isEmpty());
+        }
+        moveSelected.setText(selectedKeys.size()+"개 앱 이동");
+        moveSelected.setEnabled(!busy&&!selectedKeys.isEmpty()&&!planReadFailed);
         empty.setText(snapshot==null?"백업 속 폴더를 불러와 정리하세요.\n\n앱 이동과 자동 정리는 이 기기의 로컬 분류안에만 저장됩니다."
                 : "검색 결과가 없습니다.\n검색어를 지우거나 다른 폴더를 확인하세요.");
         list.setAdapter(new BaseAdapter() {
             public int getCount(){return rows.size();}
             public String getItem(int position){return rows.get(position);}
             public long getItemId(int position){return position;}
-            public boolean isEnabled(int position){return proposal==null;}
+            public boolean areAllItemsEnabled(){return false;}
+            public boolean isEnabled(int position){return proposal==null&&kinds.get(position)!=ROW_SECTION;}
             public View getView(int position,View convert,ViewGroup parent) {
-                String key=getItem(position);
-                boolean heading=proposal!=null&&headingRows.contains(position);
+                String key=getItem(position);int kind=kinds.get(position);
                 LinearLayout row=new LinearLayout(MainActivity.this);row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                if(kind==ROW_SECTION) {
+                    TextView heading=text(key,14);heading.setTypeface(null,1);heading.setTextColor(secondary);heading.setAccessibilityHeading(true);
+                    row.setPadding(dp(12),dp(position==0?4:16),dp(12),0);row.setTag("section:"+key);row.addView(heading);
+                    return row;
+                }
+                boolean heading=kind==ROW_PROPOSAL;
                 row.setPadding(dp(12),dp(12),dp(12),dp(12));row.setMinimumHeight(dp(72));
-                row.setTag((browsing||heading?"folder:":"app:")+key);
-                if(selectedKeys.contains(key))row.setBackgroundColor(container);
+                row.setTag((kind==ROW_APP?"app:":"folder:")+key);
                 LinearLayout words=new LinearLayout(MainActivity.this);words.setOrientation(LinearLayout.VERTICAL);
-                if(browsing) {
+                if(kind==ROW_FOLDER) {
                     LinearLayout thumbnails=new LinearLayout(MainActivity.this);
                     thumbnails.setOrientation(LinearLayout.VERTICAL);
                     List<String> members=folders.get(key);
@@ -421,63 +514,129 @@ public final class MainActivity extends Activity {
                 } else if(heading) {
                     TextView title=text(key+" · "+proposal.folders.get(key).size()+"개",18);title.setTypeface(null,1);title.setTextColor(primary);words.addView(title);
                 } else {
-                    if(selecting){CheckBox check=new CheckBox(MainActivity.this);check.setButtonTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{primary,secondary}));check.setChecked(selectedKeys.contains(key));check.setClickable(false);check.setFocusable(false);check.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);row.addView(check,new LinearLayout.LayoutParams(dp(48),dp(48)));}
+                    boolean chosen=selecting&&selectedKeys.contains(key);
+                    if(proposal==null){row.setMinimumHeight(dp(56));row.setPadding(dp(12),dp(8),dp(12),dp(8));}
+                    if(chosen)row.setBackgroundColor(container);
+                    if(selecting){CheckBox check=new CheckBox(MainActivity.this);check.setButtonTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{primary,secondary}));check.setChecked(chosen);check.setClickable(false);check.setFocusable(false);check.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);row.addView(check,new LinearLayout.LayoutParams(dp(48),dp(48)));}
                     ImageView im=new ImageView(MainActivity.this);im.setImageDrawable(icon(key));im.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
                     LinearLayout.LayoutParams imageParams=new LinearLayout.LayoutParams(dp(40),dp(40));imageParams.setMarginEnd(dp(12));row.addView(im,imageParams);
                     words.addView(text(label(apps.get(key)),16));
-                    String detail=folderOf(key)+" · "+apps.get(key).packageName;
+                    String detail;
                     if(proposal!=null) {
                         String target=folderIn(proposal.folders,key);
                         detail=folderOf(key).equals(target)?"유지 · "+target:folderOf(key)+" → "+target;
                         detail+="\n"+(proposal.uncertainKeys.contains(key)?"검토 필요 · ":"")+proposal.reasons.getOrDefault(key,"기존 배정 유지");
                         detail+="\n"+apps.get(key).packageName;
-                    }
-                    TextView metadata=text(detail,13);metadata.setTextColor(secondary);words.addView(metadata);
+                    } else detail=identity(key,acrossFolders,identityCounts);
+                    if(!detail.isEmpty()){TextView metadata=text(detail,13);metadata.setTextColor(secondary);words.addView(metadata);}
+                    if(proposal==null)row.setContentDescription(label(apps.get(key))+", "+folderOf(key)+(selecting?(chosen?", 선택됨":", 선택 안 됨"):""));
                 }
                 row.addView(words,new LinearLayout.LayoutParams(0,-2,1));
-                if(selecting)row.setContentDescription(label(apps.get(key))+", "+folderOf(key)+(selectedKeys.contains(key)?", 선택됨":", 선택 안 됨"));
                 return row;
             }
         });
         list.setOnItemClickListener((p,v,position,id) -> {
             if(busy||proposal!=null)return;
-            String key=rows.get(position);
-            if(browsing){showFolder(key);}
-            else if(selecting){toggleSelection(key);}else moveDialog(key);
+            String key=rows.get(position);int kind=kinds.get(position);
+            if(kind==ROW_FOLDER)showFolder(key);
+            else if(kind==ROW_APP){if(selecting)toggleSelection(key);else moveDialog(key);}
         });
         list.setOnItemLongClickListener((p,v,position,id) -> {
-            if(busy||proposal!=null||browsing)return false;
+            if(busy||proposal!=null||kinds.get(position)!=ROW_APP)return false;
             selecting=true;toggleSelection(rows.get(position));return true;
         });
     }
     private void toggleSelection(String key){if(!selectedKeys.remove(key))selectedKeys.add(key);refresh();}
+    private void toggleVisibleSelection(){
+        List<String> shown=visibleKeys();
+        if(!shown.isEmpty()&&selectedKeys.containsAll(shown))selectedKeys.removeAll(shown);else selectedKeys.addAll(shown);
+        refresh();
+    }
+    private void exitSelection(){selecting=false;selectedKeys.clear();refresh();}
     private String folderIn(Map<String,List<String>> plan,String key){for(Map.Entry<String,List<String>> f:plan.entrySet())if(f.getValue().contains(key))return f.getKey();return "미분류";}
     private String folderOf(String key){return folderIn(folders,key);}
-    private void moveDialog(String key){selectedKeys.clear();selectedKeys.add(key);bulkMoveDialog();}
-    private void bulkMoveDialog(){
-        if(selectedKeys.isEmpty())return;
-        final ArrayList<String> moving=new ArrayList<>(selectedKeys);
-        ArrayList<String> names=new ArrayList<>(folders.keySet());names.add("새 폴더 만들기");
-        new AlertDialog.Builder(this).setTitle(moving.size()+"개 앱 이동").setItems(names.toArray(new String[0]),(d,index) -> {
-            if(index==names.size()-1)askName("새 폴더 이름","",name -> bulkMove(moving,name));
-            else bulkMove(moving,names.get(index));
-        }).setNegativeButton("취소",null).show();
+    // A single tapped app never touches selectedKeys, so cancelling cannot leak a hidden selection.
+    private void moveDialog(String key){moveTargetDialog(Collections.singletonList(key));}
+    private void bulkMoveDialog(){moveTargetDialog(new ArrayList<>(selectedKeys));}
+    private boolean alreadyIn(String folder,Collection<String> keys){List<String> members=folders.get(folder);return members!=null&&members.containsAll(keys);}
+    private void moveTargetDialog(Collection<String> keys){
+        if(busy||snapshot==null||proposal!=null||keys.isEmpty())return;
+        if(planReadFailed){note("저장안이 손상되어 이동할 수 없습니다. 올바른 분류안을 가져오거나 원본 분류로 되돌리기를 선택하세요.");return;}
+        final ArrayList<String> moving=new ArrayList<>(keys);
+        final ArrayList<String> names=new ArrayList<>(folders.keySet());
+        final AlertDialog[] dialog=new AlertDialog[1];
+        final boolean[] done=new boolean[1];
+        LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(16),0,dp(16),0);
+        if(moving.size()==1) {
+            ExmlEditor.App app=apps.get(moving.get(0));
+            TextView where=text("지금 "+folderOf(app.key)+"\n"+app.packageName,13);where.setTextColor(secondary);where.setPadding(dp(8),0,dp(8),dp(4));
+            box.addView(where);
+        }
+        LinearLayout top=row(box);
+        Button create=button(top,"새 폴더 만들기",v -> {
+            if(done[0])return;dialog[0].dismiss();
+            askName("새 폴더 이름","",moving.size()==1?"앱 1개짜리 폴더가 됩니다. 새 파일을 준비하기 전에 앱을 더 넣거나 다른 폴더와 합치세요.":null,"만들고 이동",
+                    name -> {if(done[0])return;done[0]=true;bulkMove(moving,name);});
+        });
+        create.setId(ID_MOVE_NEW);create.setTag("move-target-new");create.setBackgroundTintList(ColorStateList.valueOf(container));
+        ListView targets=new ListView(this);targets.setId(ID_MOVE_LIST);targets.setTag("move-target-list");targets.setDividerHeight(0);
+        targets.setAdapter(new BaseAdapter() {
+            public int getCount(){return names.size();}
+            public String getItem(int position){return names.get(position);}
+            public long getItemId(int position){return position;}
+            public boolean areAllItemsEnabled(){return false;}
+            // Only a pure no-op is disabled; partially-contained targets still gather the rest.
+            public boolean isEnabled(int position){return !alreadyIn(names.get(position),moving);}
+            public View getView(int position,View convert,ViewGroup parent) {
+                String name=names.get(position);List<String> members=folders.get(name);
+                int inside=0;for(String key:moving)if(members.contains(key))inside++;
+                boolean noop=inside==moving.size();
+                LinearLayout row=new LinearLayout(MainActivity.this);row.setOrientation(LinearLayout.VERTICAL);
+                row.setGravity(android.view.Gravity.CENTER_VERTICAL);row.setMinimumHeight(dp(56));row.setPadding(dp(8),dp(6),dp(8),dp(6));
+                row.setTag("move-target:"+name);
+                TextView title=text(name,16);title.setTextColor(noop?secondary:foreground);row.addView(title);
+                String detail=members.size()+"개 앱"+(noop?(moving.size()==1?" · 지금 여기 있음":" · 모두 이미 여기 있음"):inside>0?" · 선택 중 "+inside+"개 포함":"");
+                TextView meta=text(detail,13);meta.setTextColor(secondary);row.addView(meta);
+                row.setContentDescription(name+", "+detail+(noop?", 선택할 수 없음":""));
+                return row;
+            }
+        });
+        targets.setOnItemClickListener((p,v,position,id) -> {
+            String target=names.get(position);
+            if(done[0]||busy||alreadyIn(target,moving))return;
+            done[0]=true;dialog[0].dismiss();bulkMove(moving,target);
+        });
+        box.addView(targets,new LinearLayout.LayoutParams(-1,-2));
+        String title=moving.size()==1?label(apps.get(moving.get(0)))+" 이동":moving.size()+"개 앱 이동";
+        dialog[0]=new AlertDialog.Builder(this).setTitle(title).setView(box).setNegativeButton("취소",null).create();
+        dialog[0].show();
     }
     private void move(String key,String target){bulkMove(Collections.singletonList(key),target);}
     public void bulkMove(Collection<String> keys,String target){
         if(busy||snapshot==null||proposal!=null)return;
-        try{commitPlan(FolderPlanner.move(folders,keys,target),"앱 이동 완료 · "+target);}
+        int changed=0;for(String key:keys)if(apps.containsKey(key)&&!folderOf(key).equals(target))changed++;
+        try{commitPlan(FolderPlanner.move(folders,keys,target),changed+"개 앱 → "+target);}
         catch(IllegalArgumentException e){note(e.getMessage());}
     }
     private void commitPlan(LinkedHashMap<String,List<String>> next,String message){
         if(planReadFailed){note("저장안이 손상되어 덮어쓰지 않았습니다. 올바른 분류안을 가져오거나 원본 분류로 되돌리기를 선택하세요.");return;}
         FolderPlanner.validate(plannerApps(),next);
         if(new ArrayList<>(folders.entrySet()).equals(new ArrayList<>(next.entrySet()))){note("변경할 내용이 없습니다.");return;}
-        undoPlan=FolderPlanner.copy(folders);foldersFrom(next);pendingOutput=null;
-        selectedKeys.clear();selecting=false;savePlan();refresh();note(message+" · 로컬 분류안만 변경됨");
+        undoPlan=FolderPlanner.copy(folders);foldersFrom(next);pendingOutput=null;lastResult=message;
+        selectedKeys.clear();selecting=false;boolean saved=savePlan();refresh();putDiagnostic("last_result",message);
+        if(saved)note("로컬 분류안에 저장했습니다. 런처는 그대로입니다.");
     }
     private interface NameAction{void apply(String name);}
-    private void askName(String title,String initial,NameAction action){EditText field=new EditText(this);field.setSingleLine(true);field.setMinHeight(dp(48));field.setText(initial);AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(field).setPositiveButton("저장",null).setNegativeButton("취소",null).create();dialog.setOnShowListener(v -> dialog.getButton(-1).setOnClickListener(w -> {String name=field.getText().toString();if(name.trim().isEmpty()||name.equals("전체")||(!name.equals(initial)&&folders.containsKey(name))){field.setError("빈 이름·전체·중복 폴더명은 쓸 수 없습니다.");return;}try{action.apply(name);dialog.dismiss();}catch(IllegalArgumentException e){field.setError(e.getMessage());}}));dialog.show();}
+    private void askName(String title,String initial,NameAction action){askName(title,initial,null,"저장",action);}
+    private void askName(String title,String initial,String warning,String confirm,NameAction action){
+        LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(20),0,dp(20),0);
+        if(warning!=null){TextView caution=text(warning,14);caution.setTag("name-warning");box.addView(caution);}
+        EditText field=new EditText(this);field.setSingleLine(true);field.setMinHeight(dp(48));field.setText(initial);field.setTag("folder-name");box.addView(field);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(box).setPositiveButton(confirm,null).setNegativeButton("취소",null).create();
+        dialog.setOnShowListener(v -> dialog.getButton(-1).setOnClickListener(w -> {String name=field.getText().toString();if(name.trim().isEmpty()||name.equals("전체")||(!name.equals(initial)&&folders.containsKey(name))){field.setError("빈 이름·전체·중복 폴더명은 쓸 수 없습니다.");return;}try{action.apply(name);dialog.dismiss();}catch(IllegalArgumentException e){field.setError(e.getMessage());}}));
+        if(dialog.getWindow()!=null)dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+        field.requestFocus();dialog.show();
+    }
     private void folderManager(){
         if(snapshot==null){note("먼저 백업을 불러오세요.");return;}
         ArrayList<String> names=new ArrayList<>(folders.keySet());
@@ -486,13 +645,13 @@ public final class MainActivity extends Activity {
     private void folderActions(String name){
         new AlertDialog.Builder(this).setTitle(name).setItems(new String[]{"이름 바꾸기","다른 폴더로 합치기"},(d,index) -> {
             if(index==0)askName("폴더 이름 바꾸기",name,newName -> {
-                commitPlan(FolderPlanner.rename(folders,name,newName),"폴더 이름 변경");
+                commitPlan(FolderPlanner.rename(folders,name,newName),"이름 변경 → "+newName);
                 if(folders.containsKey(newName))selectedFolder=newName;refresh();
             });else {
                 ArrayList<String> targets=new ArrayList<>(folders.keySet());targets.remove(name);
                 if(targets.isEmpty()){note("합칠 다른 폴더가 없습니다.");return;}
                 new AlertDialog.Builder(this).setTitle(name+"의 앱을 모두 합칠 폴더").setItems(targets.toArray(new String[0]),(dialog,which) -> {
-                    String target=targets.get(which);commitPlan(FolderPlanner.merge(folders,name,target),"폴더 병합 완료");
+                    String target=targets.get(which);commitPlan(FolderPlanner.merge(folders,name,target),name+" → "+target+" 병합");
                     if(!folders.containsKey(name))selectedFolder=target;refresh();
                 }).setNegativeButton("취소",null).show();
             }
@@ -546,7 +705,7 @@ public final class MainActivity extends Activity {
         if(busy||snapshot==null||value==null||planReadFailed)return;
         FolderPlanner.validate(plannerApps(),value.folders);
         LinkedHashMap<String,List<String>> next=FolderPlanner.copy(value.folders);proposal=null;
-        commitPlan(next,"제안 적용 완료");refresh();
+        commitPlan(next,"자동 정리 적용 · "+value.movedCount+"개 이동");refresh();
     }
     private void undoLastChange(){undo();}
     private void moveApps(Collection<String> keys,String target){bulkMove(keys,target);}
@@ -560,8 +719,8 @@ public final class MainActivity extends Activity {
     }
     public void undo(){
         if(busy||undoPlan==null||proposal!=null||planReadFailed)return;
-        foldersFrom(undoPlan);undoPlan=null;pendingOutput=null;selectedKeys.clear();selecting=false;
-        savePlan();refresh();note("직전 편집을 되돌렸습니다. 실제 런처는 바뀌지 않았습니다.");
+        foldersFrom(undoPlan);undoPlan=null;lastResult=null;pendingOutput=null;selectedKeys.clear();selecting=false;
+        boolean saved=savePlan();refresh();if(saved)note("직전 편집을 되돌렸습니다. 런처는 그대로입니다.");
     }
     private void choose(int request,String mime,String name){
         if(request!=OPEN&&snapshot==null){note("먼저 백업을 불러오세요.");return;}Intent intent=new Intent(request==OPEN||request==IMPORT_PLAN?Intent.ACTION_OPEN_DOCUMENT:Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime);if(!name.isEmpty())intent.putExtra(Intent.EXTRA_TITLE,name);intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);try{startActivityForResult(intent,request);}catch(Exception e){note("파일 선택기 오류: "+e.getMessage());}
@@ -603,13 +762,14 @@ public final class MainActivity extends Activity {
         meta.put("name",name);meta.put("transport",via);
         write(new File(getFilesDir(),"source-meta.json"),meta.toString().getBytes(StandardCharsets.UTF_8));
     }
-    private void savePlan(){
-        if(snapshot==null||planReadFailed)return;
+    private boolean savePlan(){
+        if(snapshot==null||planReadFailed)return false;
         try{
             byte[] bytes=planJson().toString(2).getBytes(StandardCharsets.UTF_8);
             write(planFile(snapshot.sourceSha256),bytes);
             write(new File(getFilesDir(),"plan.json"),bytes);
-        }catch(Exception e){note("분류안 저장 실패: "+e.getMessage());}
+            return true;
+        }catch(Exception e){note("분류안 저장 실패: "+e.getMessage());return false;}
     }
     private void restoreLocalSession(){
         try{
