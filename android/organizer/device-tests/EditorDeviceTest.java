@@ -53,15 +53,11 @@ public final class EditorDeviceTest extends Instrumentation {
             final String sourceName=new JSONObject(new String(Files.readAllBytes(new File(dir,"source-meta.json").toPath()),StandardCharsets.UTF_8)).getString("name");
             check(snapshot.sourceSha256.equals(ExmlEditor.sha256(source)),"Local source hash");
             ui(() -> {
-                ListView list=(ListView)field("list");Spinner filter=(Spinner)field("filter");
-                check(list.getAdapter().getCount()==snapshot.apps.size(),"UI list covers every source component");
-                check(filter.getAdapter().getCount()==originalPlan.size()+1,"UI folder choices plus all");
-                filter.setSelection(1);
-                // Exercise the actual listener even when keyguard suppresses view layout.
-                // This verifies UI/controller behavior, not an unlocked-screen gesture.
-                filter.getOnItemSelectedListener().onItemSelected(filter,null,1,filter.getItemIdAtPosition(1));
+                ListView list=(ListView)field("list");
+                check(list.getAdapter().getCount()==originalPlan.size(),"Folder-first UI covers every saved folder");
+                call("showFolder",new Class<?>[]{String.class},originalPlan.keySet().iterator().next());
             });waitForIdleSync();
-            ui(() -> {check(((ListView)field("list")).getAdapter().getCount()==originalPlan.values().iterator().next().size(),"Folder filter actually changes the UI list");});
+            ui(() -> {check(((ListView)field("list")).getAdapter().getCount()==originalPlan.values().iterator().next().size(),"Folder detail actually filters the UI list");call("showFolders",new Class<?>[0]);});
             String from=null,to=null,key=null;
             for(Map.Entry<String,List<String>> e:originalPlan.entrySet())if(e.getValue().size()>2){from=e.getKey();key=e.getValue().get(0);break;}
             for(String name:originalPlan.keySet())if(!name.equals(from)){to=name;break;}

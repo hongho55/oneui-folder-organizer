@@ -40,8 +40,12 @@ def main():
         parser.error("Install SDK platforms;android-35 and build-tools;36.0.0")
     out = BASE / 'build'
     out.mkdir(exist_ok=True)
-    for folder in ['classes', 'dex', 'generated', 'deps']:
-        (out / folder).mkdir(exist_ok=True)
+    for folder in ['classes', 'dex', 'generated']:
+        generated = out / folder
+        if generated.exists():
+            shutil.rmtree(generated)
+        generated.mkdir()
+    (out / 'deps').mkdir(exist_ok=True)
     env = dict(os.environ)
     if args.java_home:
         env['JAVA_HOME'] = str(Path(args.java_home).resolve())

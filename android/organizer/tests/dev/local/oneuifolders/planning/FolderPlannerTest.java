@@ -42,6 +42,9 @@ public final class FolderPlannerTest {
         List<AppInfo> apps = Arrays.asList(a, b);
         LinkedHashMap<String, List<String>> valid = plan("미분류", a.key, b.key);
         FolderPlanner.validate(apps, valid);
+        LinkedHashMap<String,List<String>> padded=plan(" 전체 ",a.key,b.key);
+        FolderPlanner.validate(apps,padded);
+        equal(" 전체 ",FolderPlanner.copy(padded).keySet().iterator().next(),"existing literal folder name is not trimmed into a reserved token");
         fails(() -> FolderPlanner.validate(null, valid));
         fails(() -> FolderPlanner.validate(Arrays.asList(a, null), valid));
         fails(() -> FolderPlanner.validate(Arrays.asList(a, a), valid));
@@ -52,7 +55,7 @@ public final class FolderPlannerTest {
         LinkedHashMap<String, List<String>> across = plan("x", a.key, b.key);
         across.put("y", Arrays.asList(b.key));
         fails(() -> FolderPlanner.validate(apps, across));
-        for (String name : Arrays.asList(null, "", " \t", "\u2003", "전체", " 전체 ", "bad\u0001", "bad\ud800")) {
+        for (String name : Arrays.asList(null, "", " \t", "\u2003", "전체", "bad\u0001", "bad\ud800")) {
             fails(() -> FolderPlanner.validate(apps, plan(name, a.key, b.key)));
         }
         fails(() -> FolderPlanner.copy(null));

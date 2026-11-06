@@ -7,6 +7,7 @@ requires an already approved Shizuku app, an imported native source, and explici
 import argparse
 import hashlib
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import zipfile
@@ -22,6 +23,9 @@ def main():
     base = Path(__file__).resolve().parent
     main_build = base.parent/'build'
     out = main_build/'device-tests'
+    for directory in [out/'classes', out/'dex']:
+        if directory.exists():
+            shutil.rmtree(directory)
     for directory in [out, out/'classes', out/'dex']:
         directory.mkdir(parents=True, exist_ok=True)
     sdk = Path(args.sdk).expanduser().resolve()
@@ -37,9 +41,12 @@ def main():
         subprocess.run([str(x) for x in command], env=env, check=True, timeout=120)
 
     jars = sorted((main_build/'deps').glob('*.jar'))
+    sources = sorted(base.glob('*.java'))
+    if not sources:
+        parser.error('No device test sources')
     run(java/'javac', '--release', '8', '-encoding', 'UTF-8', '-classpath',
         os.pathsep.join(map(str, [android, main_build/'classes']+jars)),
-        '-d', out/'classes', base/'EditorDeviceTest.java')
+        '-d', out/'classes', *sources)
     run(tools/'d8', '--lib', android, '--classpath', main_build/'oneui-folder-organizer.apk',
         '--min-api', '30', '--output', out/'dex', *sorted((out/'classes').rglob('*.class')))
     unsigned = out/'unsigned.apk'

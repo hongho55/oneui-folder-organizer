@@ -272,7 +272,7 @@ public final class FolderPlanner {
     }
 
     private static void checkName(String name) {
-        if (blank(name) || "전체".equals(name.trim())) {
+        if (blank(name) || "전체".equals(name)) {
             throw new IllegalArgumentException("Nonblank, nonreserved folder name required");
         }
         for (int i = 0; i < name.length();) {

@@ -78,16 +78,16 @@ public final class MainActivity extends Activity {
         }
     }
     private ListView list;
-    private boolean busy, binding;
+    private boolean busy, binding, prepareAfterConnect;
     private IBackupService bridge;
     private ExmlEditor.Result pendingOutput;
     private String pendingName;
     private Shizuku.UserServiceArgs serviceArgs;
     private final Shizuku.OnBinderReceivedListener binderReceived = () -> runOnUiThread(() -> updateShizukuState());
-    private final Shizuku.OnBinderDeadListener binderDead = () -> runOnUiThread(() -> { bridge = null; binding = false; note("Shizuku 연결이 끊겼습니다. 다시 연결하거나 ADB 대안을 쓰세요."); });
+    private final Shizuku.OnBinderDeadListener binderDead = () -> runOnUiThread(() -> { bridge = null; binding = false; prepareAfterConnect=false; note("Shizuku 연결이 끊겼습니다. 다시 연결하거나 ADB 대안을 쓰세요."); });
     private final Shizuku.OnRequestPermissionResultListener permissionResult = (code, grant) -> runOnUiThread(() -> {
         if (code == SHIZUKU_PERMISSION && grant == PackageManager.PERMISSION_GRANTED) bindBridge();
-        else note("Shizuku 권한이 거부됐습니다. 오프라인 편집과 PC ADB 대안은 사용할 수 있습니다.");
+        else {prepareAfterConnect=false;note("Shizuku 권한이 거부됐습니다. 오프라인 편집과 PC ADB 대안은 사용할 수 있습니다.");}
     });
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
@@ -96,10 +96,10 @@ public final class MainActivity extends Activity {
                 JSONObject info = new JSONObject(bridge.info());
                 if (info.getInt("uid") != 2000) throw new IllegalStateException("안전을 위해 ADB shell 모드 Shizuku만 지원합니다.");
                 String[] names = bridge.listBackups();
-                runOnUiThread(() -> { putDiagnostic("shizuku_info", info); showBackups(names); });
+                runOnUiThread(() -> { putDiagnostic("shizuku_info", info); if(prepareAfterConnect){prepareAfterConnect=false;confirmStage();}else showBackups(names); });
             });
         }
-        @Override public void onServiceDisconnected(ComponentName name) { bridge = null; binding = false; note("파일 서비스가 종료됐습니다."); }
+        @Override public void onServiceDisconnected(ComponentName name) { bridge = null; binding = false; prepareAfterConnect=false; note("파일 서비스가 종료됐습니다."); }
     };
     private interface Work { void run() throws Exception; }
 
@@ -125,6 +125,11 @@ public final class MainActivity extends Activity {
         Shizuku.addBinderDeadListener(binderDead);
         Shizuku.addRequestPermissionResultListener(permissionResult);
         restoreLocalSession();
+        Object retained=getLastNonConfigurationInstance();
+        if(retained instanceof UndoState && snapshot!=null && !planReadFailed) {
+            UndoState previous=(UndoState)retained;
+            if(snapshot.sourceSha256.equals(previous.sourceHash))undoPlan=FolderPlanner.copy(previous.plan);
+        }
         if (state != null) {
             selectedFolder = state.getString("folder", "전체");
             search.setText(state.getString("query", ""));
@@ -199,7 +204,7 @@ public final class MainActivity extends Activity {
     }
     private Button button(LinearLayout row,String label,View.OnClickListener action) {
         Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setTextSize(14);
-        b.setTextColor(primary);b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(dp(48));
+        b.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{secondary,primary}));b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(dp(48));
         LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,-2,1);params.setMargins(dp(4),dp(4),dp(4),dp(4));
         if(row==actions){params.width=-2;params.weight=0;b.setMinWidth(dp(96));}
         row.addView(b,params);b.setOnClickListener(v -> { if(!busy) action.onClick(v); });return b;
@@ -224,7 +229,10 @@ public final class MainActivity extends Activity {
     }
     private void prepareFile() {
         if(snapshot==null){connect();return;}
-        if(bridge!=null && transport.equals("shizuku"))confirmStage();else exportExml();
+        if(transport.equals("shizuku")) {
+            if(bridge!=null)confirmStage();
+            else connect(true);
+        }else exportExml();
     }
     private void navigateBack() {
         if(proposal!=null){cancelProposal();return;}
@@ -234,40 +242,54 @@ public final class MainActivity extends Activity {
         finish();
     }
     @Override public void onBackPressed(){navigateBack();}
+    private static final class UndoState {
+        final String sourceHash;
+        final LinkedHashMap<String,List<String>> plan;
+        UndoState(String hash,Map<String,List<String>> value){sourceHash=hash;plan=FolderPlanner.copy(value);}
+    }
+    @Override public Object onRetainNonConfigurationInstance(){return snapshot==null||undoPlan==null?null:new UndoState(snapshot.sourceSha256,undoPlan);}
     @Override protected void onSaveInstanceState(Bundle out) {
         out.putString("folder",selectedFolder);out.putString("query",query);super.onSaveInstanceState(out);
     }
     private void note(String message) { if(status!=null)status.setText(message);putDiagnostic("status",message); }
     private void background(String message,Work task) {
         if(busy){note("진행 중인 작업이 끝난 뒤 다시 눌러 주세요.");return;}busy=true;if(list!=null)list.setEnabled(false);refresh();note(message);
-        worker.execute(() -> { try{task.run();}catch(Exception e){runOnUiThread(() -> note("실패: "+e.getMessage()+"\nADB 대안 또는 다시 불러오기를 사용하세요."));putDiagnostic("last_error",e.getClass().getSimpleName()+": "+e.getMessage());}finally{runOnUiThread(() -> {busy=false;if(list!=null)list.setEnabled(true);refresh();});} });
+        worker.execute(() -> { try{task.run();}catch(Exception e){runOnUiThread(() -> {prepareAfterConnect=false;note("실패: "+e.getMessage()+"\nADB 대안 또는 다시 불러오기를 사용하세요.");});putDiagnostic("last_error",e.getClass().getSimpleName()+": "+e.getMessage());}finally{runOnUiThread(() -> {busy=false;if(list!=null)list.setEnabled(true);refresh();});} });
     }
     private void updateShizukuState() {
         try { note(Shizuku.pingBinder() ? "Shizuku 실행 중 · 불러오기를 누르면 권한을 확인합니다." : "Shizuku가 실행되지 않았습니다. Shizuku 앱에서 시작하거나 ADB 대안을 쓰세요."); }
         catch(Exception e){note("Shizuku 없음 · 파일 불러오기와 ADB 대안을 사용할 수 있습니다.");}
     }
-    private void connect() {
+    private void connect(){connect(false);}
+    private void connect(boolean forPreparation) {
+        prepareAfterConnect=forPreparation;
         try {
-            if(!Shizuku.pingBinder()){fallback();return;}
+            if(!Shizuku.pingBinder()){prepareAfterConnect=false;fallback();return;}
             if(Shizuku.isPreV11())throw new IllegalStateException("Shizuku 11 이상이 필요합니다.");
             if(Shizuku.getUid()!=2000)throw new IllegalStateException("루트가 아닌 shell 모드 Shizuku만 지원합니다.");
             if(Shizuku.checkSelfPermission()!=PackageManager.PERMISSION_GRANTED){Shizuku.requestPermission(SHIZUKU_PERMISSION);return;}
             if(bridge!=null){background("백업 목록 확인 중",() -> {String[] names=bridge.listBackups();runOnUiThread(() -> showBackups(names));});return;}
             bindBridge();
-        }catch(Exception e){note("Shizuku 연결 실패: "+e.getMessage());}
+        }catch(Exception e){prepareAfterConnect=false;note("Shizuku 연결 실패: "+e.getMessage());}
     }
-    private void bindBridge(){if(binding)return;try{binding=true;note("Shizuku 파일 서비스 연결 중");Shizuku.bindUserService(serviceArgs,connection);}catch(Exception e){binding=false;note("파일 서비스 연결 실패: "+e.getMessage());}}
+    private void bindBridge(){if(binding)return;try{binding=true;note("Shizuku 파일 서비스 연결 중");Shizuku.bindUserService(serviceArgs,connection);}catch(Exception e){binding=false;prepareAfterConnect=false;note("파일 서비스 연결 실패: "+e.getMessage());}}
     private void disconnect(boolean visible){
         try{if(bridge!=null||binding)Shizuku.unbindUserService(serviceArgs,connection,true);}catch(Exception ignored){}
-        bridge=null;binding=false;if(visible)note("Shizuku 파일 서비스 종료. 편집한 분류안은 기기에 남아 있습니다.");
+        bridge=null;binding=false;prepareAfterConnect=false;if(visible)note("Shizuku 파일 서비스 종료. 편집한 분류안은 기기에 남아 있습니다.");
     }
     private void showBackups(String[] names){
         if(names.length==0){note("백업이 없습니다. Home Up에서 먼저 즉시 백업을 만드세요.");return;}
         note("백업 "+names.length+"개 · 원본으로 사용할 파일을 선택하세요.");
         new AlertDialog.Builder(this).setTitle("Home Up 백업 선택 (최신순)").setItems(names,(dialog,index) -> loadBridgeBackup(names[index])).setNegativeButton("취소",null).show();
     }
-    private void loadBridgeBackup(String name){background("백업 읽기·검증 중",() -> {byte[] bytes;try(InputStream input=new ParcelFileDescriptor.AutoCloseInputStream(bridge.openBackup(name))){bytes=read(input);}ExmlEditor.Snapshot parsed=ExmlEditor.parse(bytes);saveSource(bytes,name,"shizuku");runOnUiThread(() -> installSource(bytes,parsed,name,"shizuku"));});}
+    private void loadBridgeBackup(String name){background("백업 읽기·검증 중",() -> {byte[] bytes;try(InputStream input=new ParcelFileDescriptor.AutoCloseInputStream(bridge.openBackup(name))){bytes=read(input);}ExmlEditor.Snapshot parsed=ExmlEditor.parse(bytes);validateSource(parsed);saveSource(bytes,name,"shizuku");runOnUiThread(() -> installSource(bytes,parsed,name,"shizuku"));});}
+    private static void validateSource(ExmlEditor.Snapshot parsed){
+        ArrayList<FolderPlanner.AppInfo> identities=new ArrayList<>();
+        for(ExmlEditor.App app:parsed.apps)identities.add(new FolderPlanner.AppInfo(app.key,app.packageName,app.packageName,-1));
+        FolderPlanner.validate(identities,parsed.folders);
+    }
     private void installSource(byte[] bytes,ExmlEditor.Snapshot parsed,String name,String via){
+        validateSource(parsed);
         source=bytes;snapshot=parsed;sourceName=name;transport=via;apps.clear();labels.clear();icons.clear();
         for(ExmlEditor.App app:parsed.apps)apps.put(app.key,app);
         folders.clear();folders.putAll(FolderPlanner.copy(parsed.folders));
@@ -285,8 +307,9 @@ public final class MainActivity extends Activity {
         try {
             if(candidate!=null)foldersFrom(decodePlan(new JSONObject(new String(java.nio.file.Files.readAllBytes(candidate.toPath()),StandardCharsets.UTF_8))));
         }catch(Exception e){planReadFailed=true;}
+        if(candidate==null&&!planReadFailed)savePlan();
         refresh();
-        note(planReadFailed ? "저장안을 읽지 못했습니다. 저장 파일은 보존했습니다. 더보기에서 분류안을 내보내거나 올바른 분류안을 가져오세요. 원본 분류로 되돌리기를 선택하면 새 편집을 시작합니다."
+        note(planReadFailed ? "저장안을 읽지 못했습니다. 저장 파일은 보존했습니다. 더보기에서 올바른 분류안을 가져오거나 원본 분류로 되돌려 새 편집을 시작하세요."
                 : "불러옴 · "+name+" · 로컬 분류안 자동 저장. 실제 런처는 바뀌지 않았습니다.");
         putDiagnostic("source_name",name);putDiagnostic("source_sha256",parsed.sourceSha256);putDiagnostic("source_transport",via);putDiagnostic("app_count",apps.size());
     }
@@ -302,18 +325,21 @@ public final class MainActivity extends Activity {
                 : apps.size()+"개 앱 · "+folders.size()+"개 폴더"+(invalid>0?" · 2개 미만 "+invalid+"개: 파일 준비 전 병합 필요":"")+(selecting?" · "+selectedKeys.size()+"개 선택":""));
         back.setVisibility(proposal!=null||selecting||!selectedFolder.equals("전체")||!query.isEmpty()?View.VISIBLE:View.GONE);
         prepare.setText(snapshot==null?"Shizuku로 백업 불러오기":"새 파일 준비");
+        prepare.setVisibility(proposal==null&&!selecting?View.VISIBLE:View.GONE);
         prepare.setEnabled(!busy&&proposal==null&&!planReadFailed);
         search.setVisibility(proposal==null&&snapshot!=null?View.VISIBLE:View.GONE);
-        menuButton.setEnabled(!busy);search.setEnabled(!busy);
+        menuButton.setEnabled(!busy&&proposal==null);search.setEnabled(!busy);
         fileImport.setVisibility(snapshot==null?View.VISIBLE:View.GONE);fileImport.setEnabled(!busy);
         actions.removeAllViews();
         if(proposal!=null) {
             Button cancel=button(actions,"취소",v -> cancelProposal());cancel.setId(ID_CANCEL);
             Button apply=button(actions,"로컬 분류안에 적용",v -> applyProposal());apply.setId(ID_APPLY);apply.setTag("proposal-apply");
+            apply.setBackgroundTintList(ColorStateList.valueOf(container));
         } else if(snapshot!=null) {
             if(selecting) {
                 Button select=button(actions,"현재 결과 모두 선택",v -> {selectedKeys.addAll(visibleKeys());refresh();});select.setId(ID_SELECT);
                 Button move=button(actions,"선택 이동 ("+selectedKeys.size()+")",v -> bulkMoveDialog());move.setId(ID_MOVE);move.setTag("selection-move");move.setEnabled(!selectedKeys.isEmpty()&&!busy);
+                move.setBackgroundTintList(ColorStateList.valueOf(container));
             } else {
                 Button recommend=button(actions,"자동 정리",v -> suggest());recommend.setId(ID_RECOMMEND);recommend.setTag("auto");recommend.setEnabled(!planReadFailed&&!busy);
                 Button select=button(actions,selectedFolder.equals("전체")?"앱 선택":"선택·이동",v -> {selecting=true;refresh();});select.setId(ID_SELECT);
@@ -354,9 +380,10 @@ public final class MainActivity extends Activity {
         if(list==null)return;
         boolean browsing=proposal==null&&!selecting&&selectedFolder.equals("전체");
         ArrayList<String> rows=new ArrayList<>();
+        final Set<Integer> headingRows=new HashSet<>();
         if(proposal!=null) {
             for(Map.Entry<String,List<String>> group:proposal.folders.entrySet()) {
-                rows.add(group.getKey());rows.addAll(group.getValue());
+                headingRows.add(rows.size());rows.add(group.getKey());rows.addAll(group.getValue());
             }
         } else if(browsing) {
             for(Map.Entry<String,List<String>> group:folders.entrySet()) {
@@ -374,7 +401,7 @@ public final class MainActivity extends Activity {
             public boolean isEnabled(int position){return proposal==null;}
             public View getView(int position,View convert,ViewGroup parent) {
                 String key=getItem(position);
-                boolean heading=proposal!=null&&!apps.containsKey(key);
+                boolean heading=proposal!=null&&headingRows.contains(position);
                 LinearLayout row=new LinearLayout(MainActivity.this);row.setGravity(android.view.Gravity.CENTER_VERTICAL);
                 row.setPadding(dp(12),dp(12),dp(12),dp(12));row.setMinimumHeight(dp(72));
                 row.setTag((browsing||heading?"folder:":"app:")+key);
@@ -394,7 +421,7 @@ public final class MainActivity extends Activity {
                 } else if(heading) {
                     TextView title=text(key+" · "+proposal.folders.get(key).size()+"개",18);title.setTypeface(null,1);title.setTextColor(primary);words.addView(title);
                 } else {
-                    if(selecting){CheckBox check=new CheckBox(MainActivity.this);check.setChecked(selectedKeys.contains(key));check.setClickable(false);check.setFocusable(false);check.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);row.addView(check,new LinearLayout.LayoutParams(dp(48),dp(48)));}
+                    if(selecting){CheckBox check=new CheckBox(MainActivity.this);check.setButtonTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{primary,secondary}));check.setChecked(selectedKeys.contains(key));check.setClickable(false);check.setFocusable(false);check.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);row.addView(check,new LinearLayout.LayoutParams(dp(48),dp(48)));}
                     ImageView im=new ImageView(MainActivity.this);im.setImageDrawable(icon(key));im.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
                     LinearLayout.LayoutParams imageParams=new LinearLayout.LayoutParams(dp(40),dp(40));imageParams.setMarginEnd(dp(12));row.addView(im,imageParams);
                     words.addView(text(label(apps.get(key)),16));
@@ -548,7 +575,7 @@ public final class MainActivity extends Activity {
     }
     private void stage(){final ExmlEditor.Result result=pendingOutput;final String name=pendingName;background("검증된 새 백업 저장 중",() -> {File local=new File(getFilesDir(),"converted.exml");write(local,result.bytes);String raw;try(ParcelFileDescriptor fd=ParcelFileDescriptor.open(local,ParcelFileDescriptor.MODE_READ_ONLY)){raw=bridge.stage(sourceName,snapshot.sourceSha256,name,fd,result.outputSha256);}JSONObject response=new JSONObject(raw);if(!response.getString("sha256").equals(result.outputSha256)||response.getBoolean("launcher_restored"))throw new IllegalStateException("서비스 응답 검증 실패");write(new File(getFilesDir(),"last-stage.json"),response.toString(2).getBytes(StandardCharsets.UTF_8));putDiagnostic("last_stage",response);runOnUiThread(() -> note("준비 완료: "+name+"\n"+result.appCount+"개 앱 / "+result.folderCount+"개 폴더 · 원본 보관됨\nHome Up을 다시 열어 이 새 파일을 선택해 복원하세요. 아직 런처에는 적용하지 않았습니다."));});}
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();background("파일 처리 중",() -> {
-        if(request==OPEN){byte[] bytes;try(InputStream input=getContentResolver().openInputStream(uri)){bytes=read(input);}ExmlEditor.Snapshot parsed=ExmlEditor.parse(bytes);String name=displayName(uri);saveSource(bytes,name,"saf");runOnUiThread(() -> installSource(bytes,parsed,name,"saf"));}
+        if(request==OPEN){byte[] bytes;try(InputStream input=getContentResolver().openInputStream(uri)){bytes=read(input);}ExmlEditor.Snapshot parsed=ExmlEditor.parse(bytes);validateSource(parsed);String name=displayName(uri);saveSource(bytes,name,"saf");runOnUiThread(() -> installSource(bytes,parsed,name,"saf"));}
         else if(request==SAVE){if(pendingOutput==null)throw new IllegalStateException("변환 파일이 없습니다.");saveUri(uri,pendingOutput.bytes);putDiagnostic("last_export_sha256",pendingOutput.outputSha256);runOnUiThread(() -> note("새 EXML 저장·재읽기 검증 완료. Home Up 파일 이동은 ADB 안내를 참고하세요."));}
         else if(request==EXPORT_PLAN){byte[] bytes=planJson().toString(2).getBytes(StandardCharsets.UTF_8);saveUri(uri,bytes);runOnUiThread(() -> note("분류안 JSON 저장 완료. 개인 앱 목록이므로 공개하지 마세요."));}
         else if(request==IMPORT_PLAN){byte[] bytes;try(InputStream input=getContentResolver().openInputStream(uri)){bytes=read(input);}JSONObject plan=new JSONObject(new String(bytes,StandardCharsets.UTF_8));LinkedHashMap<String,List<String>> loaded=decodePlan(plan);runOnUiThread(() -> {try{preserveSavedPlan();planReadFailed=false;commitPlan(loaded,"분류안 불러오기 완료");savePlan();}catch(Exception e){note("저장안 보존 실패: "+e.getMessage());}});}
@@ -580,7 +607,7 @@ public final class MainActivity extends Activity {
         if(snapshot==null||planReadFailed)return;
         try{
             byte[] bytes=planJson().toString(2).getBytes(StandardCharsets.UTF_8);
-            preserveSavedPlan();write(planFile(snapshot.sourceSha256),bytes);
+            write(planFile(snapshot.sourceSha256),bytes);
             write(new File(getFilesDir(),"plan.json"),bytes);
         }catch(Exception e){note("분류안 저장 실패: "+e.getMessage());}
     }
