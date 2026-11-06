@@ -26,7 +26,14 @@ public final class FolderPlanner {
         {"소셜", "social", "chat", "messenger", "채팅", "메신저"},
         {"뉴스", "news", "뉴스"},
         {"지도·교통", "maps", "map", "navigation", "transit", "지도", "교통"},
-        {"생산성", "calendar", "notes", "calculator", "office", "캘린더", "메모", "계산기"}
+        {"생산성", "calendar", "notes", "calculator", "office", "캘린더", "메모", "계산기"},
+        {"금융·결제", "bank", "banking", "finance", "payment", "pay", "wallet", "은행", "뱅크", "금융", "결제", "증권"},
+        {"쇼핑·배달", "shop", "shopping", "delivery", "쇼핑", "배달", "주문"},
+        {"건강·운동", "health", "fitness", "workout", "running", "sleep", "건강", "운동", "러닝", "수면"},
+        {"여행·예약", "travel", "hotel", "flight", "booking", "숙박", "여행", "항공", "예약"},
+        {"학습·독서", "education", "learning", "study", "books", "ebook", "학습", "공부", "교육", "독서", "전자책"},
+        {"AI·도구", "chatgpt", "gemini", "claude", "copilot", "perplexity", "ai"},
+        {"도구·설정", "browser", "files", "scanner", "settings", "vpn", "도구", "설정", "파일", "브라우저"}
     };
 
     private FolderPlanner() { }

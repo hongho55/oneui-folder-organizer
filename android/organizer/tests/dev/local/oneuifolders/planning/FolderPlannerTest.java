@@ -21,6 +21,7 @@ public final class FolderPlannerTest {
     public static void main(String[] args) throws Exception {
         invalidData();
         classification();
+        genericPurposeRules();
         modesAndCopies();
         tinyGroups();
         editing();
@@ -102,6 +103,27 @@ public final class FolderPlannerTest {
         } finally {
             Locale.setDefault(before);
         }
+    }
+
+    private static void genericPurposeRules() {
+        String[][] rules = {{"bank", "금융·결제"}, {"쇼핑", "쇼핑·배달"},
+                {"fitness", "건강·운동"}, {"여행", "여행·예약"},
+                {"education", "학습·독서"}, {"chatgpt", "AI·도구"}, {"vpn", "도구·설정"}};
+        List<AppInfo> apps = new ArrayList<AppInfo>();
+        for (int i=0;i<rules.length;i++) for(int n=0;n<2;n++) {
+            String p="example.fixture.purpose"+i+".app"+n;
+            apps.add(new AppInfo(p+"\t.Main",p,"가상 "+rules[i][0]+" "+n,-1));
+        }
+        Proposal result=FolderPlanner.suggest(apps,unfiled(apps),true);
+        for(int i=0;i<rules.length;i++) for(int n=0;n<2;n++) {
+            String key=apps.get(i*2+n).key;
+            check(result.folders.get(rules[i][1]).contains(key),"generic purpose token: "+rules[i][0]);
+            check(result.uncertainKeys.contains(key),"heuristic purpose remains explicitly uncertain");
+        }
+        equal(0,result.singletonCount,"paired generic-purpose fixture is exportable");
+        List<AppInfo> unrelated=Arrays.asList(new AppInfo("example.fixture.bankruptcy\t.Main","example.fixture.bankruptcy","Airplane",-1),new AppInfo("example.fixture.shoppingcart\t.Main","example.fixture.shoppingcart","Plain",-1));
+        Proposal unknown=FolderPlanner.suggest(unrelated,unfiled(unrelated),true);
+        equal(2,unknown.folders.get("검토 필요").size(),"no substring overmatching for purpose rules");
     }
 
     private static void modesAndCopies() throws Exception {

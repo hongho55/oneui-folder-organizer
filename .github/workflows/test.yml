@@ -30,11 +30,8 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - run: sdkmanager 'platforms;android-35' 'build-tools;36.0.0'
       - run: python3 android/io-probe/build.py
-      - name: Java EXML regression tests (synthetic data only)
-        run: |
-          mkdir -p android/organizer/build/core-tests
-          javac --release 8 -encoding UTF-8 -d android/organizer/build/core-tests android/organizer/src/dev/local/oneuifolders/core/ExmlEditor.java android/organizer/tests/dev/local/oneuifolders/core/ExmlEditorTest.java
-          java -cp android/organizer/build/core-tests dev.local.oneuifolders.core.ExmlEditorTest examples/synthetic.exml
+      - name: Java EXML and folder planner regressions (synthetic data only)
+        run: python3 android/organizer/test.py
       - run: python3 android/organizer/build.py
       - run: python3 android/organizer/device-tests/build.py
       - uses: actions/upload-artifact@v4
